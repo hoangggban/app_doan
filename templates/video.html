@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Traffic Monitoring</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <style>
+        .video-container {
+            width: 70%;
+            float: left;
+        }
+        .info-container {
+            width: 30%;
+            float: right;
+        }
+        .traffic-report {
+            margin-top: 20px;
+        }
+        .alert-box {
+        padding: 10px;
+        border-radius: 5px;
+        margin-bottom: 15px;
+        color: #fff;
+        font-weight: bold;
+        display: block;
+        }
+
+        .alert-box.collision {
+        background-color: #f8d7da; /* Màu đỏ nhạt */
+       
+        }
+
+        .alert-box.congestion {
+        background-color: #fff3cd; /* Màu vàng nhạt */
+        
+        }
+
+        .alert-box.abnormal {
+        background-color: #d1ecf1; /* Màu xanh nhạt */
+       
+        }
+
+        .alert-box.crowded {
+        background-color: #d4edda; /* Màu xanh lá nhạt */
+        
+        }
+        #alerts-container {
+        margin-top: 20px;
+        }
+        #traffic-chart-container {
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container mt-5 d-flex">
+        <div class="video-container">
+            <h2 class="text-center">Video Stream</h2>
+            <img id="video-stream" src="/video_feed" alt="Video Stream" class="img-fluid">
+        </div>
+        <div class="info-container">
+            <h2 class="text-center">Traffic Information</h2>
+            <div id="alerts-container">
+                <div id="alert-collision" class="alert-box collision">
+                    <strong>Alert: </strong> <span id="alert-message-collision">Có va chạm</span>
+                </div>
+                <div id="alert-congestion" class="alert-box congestion">
+                    <strong>Alert: </strong> <span id="alert-message-congestion">Tắc nghẽn</span>
+                </div>
+                <div id="alert-abnormal" class="alert-box abnormal">
+                    <strong>Alert: </strong> <span id="alert-message-abnormal">Bất thường</span>
+                </div>
+                <div id="alert-crowded" class="alert-box crowded">
+                    <strong>Alert: </strong> <span id="alert-message-crowded">Mật độ đông đúc</span>
+                </div>
+            </div>            
+            <div class="traffic-report">
+                <h4>Traffic Report:</h4>
+                <ul>
+                    <li>Vehicles in VDZ: <span id="vehicles_in_roi">0</span></li>
+                    <li>Max Speed: <span id="max_speed">0 m/s</span></li>
+                    <li>Min Speed: <span id="min_speed">0 m/s</span></li>
+                    <li>Average Speed: <span id="avg_speed">0 m/s</span></li>
+                </ul>
+            </div>
+            <div>
+                <canvas id="speedChart" width="400" height="200"></canvas>
+            </div>
+            <div>
+                <canvas id="lineCrossChart" width="400" height="200"></canvas>
+            </div>
+            
+        </div>
+    </div>
+    <script>
+        // SSE - Lắng nghe dữ liệu giao 
+        let timeElapsed = 0;
+        const speedChart = new Chart(document.getElementById('speedChart'), {
+    type: 'line', // Line chart cho vận tốc
+    data: {
+        labels: [], // Thời gian
+        datasets: [{
+            label: 'Average Speed (km/h)',
+            data: [],
+            borderColor: 'blue',
+            backgroundColor: 'rgba(0, 0, 255, 0.2)',
+            fill: true
+        }]
+    },
+    options: {
+        responsive: true,
+        plugins: {
+            legend: {
+                position: 'top'
+            }
+        }
+    }
+});     
+        const lineCrossChart = new Chart(document.getElementById('lineCrossChart'), {
+    type: 'line', // Bar chart cho số lần cắt qua đường
+    data: {
+        labels: [], // Thời gian
+        datasets: [{
+            label: 'Line Cross Count',
+            data: [],
+            backgroundColor: 'rgba(255, 99, 132, 0.5)',
+            borderColor: 'rgba(255, 99, 132, 1)',
+            borderWidth: 1
+        }]
+    },
+    options: {
+        responsive: true,
+        plugins: {
+            legend: {
+                position: 'top'
+            }
+        }
+    }
+});
+        const frameBuffer = {
+              avg_speed: [],
+              line_cross_count: []           
+};
+
+
+        function calculateAverage(array) {
+              const sum = array.reduce((a, b) => a + b, 0);
+              return (sum / array.length) || 0; // Trả về 0 nếu array rỗng   
+}
+        function calculate(data) {
+              if (!data || !data.length) return 0; // Trả về 0 nếu mảng rỗng hoặc không hợp lệ
+              return data.reduce((sum, value) => sum + value, 0);
+}
+  
+
+        const eventSource = new EventSource('/traffic_data');
+        const eventSourceAlerts = new EventSource('/alerts');
+        
+        eventSource.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            const frameData = data.frame;
+            const byteArray = new Uint8Array(frameData.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
+            const blob = new Blob([byteArray], { type: 'image/jpeg' });
+            const url = URL.createObjectURL(blob);
+            const frameid= data.frame_id;
+            document.getElementById('video-stream').src = url;
+            document.getElementById('vehicles_in_roi').textContent = data.vehicles_in_roi;
+            frameBuffer.avg_speed.push(data.avg_speed);
+            frameBuffer.line_cross_count.push(data.line_cross_count);
+            if (frameBuffer.avg_speed.length >= 10) {
+        // Tính giá trị trung bình
+               const avgAvgSpeed = calculateAverage(frameBuffer.avg_speed);
+               requestAnimationFrame(() => {
+                    document.getElementById('min_speed').textContent = data.min_speed;
+                    document.getElementById('max_speed').textContent = data.max_speed;
+                    document.getElementById('avg_speed').textContent = data.avg_speed;
+        });
+               timeElapsed += 10; // Tăng thời gian theo từng 10 frame
+               if (speedChart.data.labels.length > 10) {
+                      speedChart.data.labels.shift();
+                      speedChart.data.datasets[0].data.shift();
+                     
+        }
+               speedChart.data.labels.push(timeElapsed); // Thêm mốc thời gian
+               speedChart.data.datasets[0].data.push(avgAvgSpeed); // Trung bình tốc độ
+               //trafficChart.data.datasets[1].data.push(avgLineCrossCount); // Trung bình số phương tiện
+
+               speedChart.update();
+              // Xóa dữ liệu cũ trong buffer
+               frameBuffer.avg_speed = [];
+               
+    }
+            if (frameBuffer.line_cross_count.length>=60){
+                const line_cross_countplus= calculate(frameBuffer.line_cross_count);
+                if(lineCrossChart.data.labels.length>10){
+                    lineCrossChart.data.labels.shift();
+                    lineCrossChart.data.datasets[0].data.shift();
+                }
+                lineCrossChart.data.labels.push(timeElapsed);
+                lineCrossChart.data.datasets[0].data.push(line_cross_countplus);
+                lineCrossChart.update();
+                frameBuffer.line_cross_count=[];
+            }
+
+            // Cập nhật dữ liệu biểu đồ
+        };
+        
+
+        // Kết nối đến route SSE
+        eventSourceAlerts.onmessage = function (event) {
+        const alertData = JSON.parse(event.data);
+            
+            // Kiểm tra nếu có sự thay đổi và chỉ cập nhật giao diện khi có thay đổi
+            updateAlerts(alertData);
+        };
+
+        // Hàm cập nhật giao diện cảnh báo
+        function updateAlerts(alerts) {
+            if (alerts.collision) {
+                document.getElementById('alert-collision').style.display = 'block';
+            } else {
+                document.getElementById('alert-collision').style.display = 'none';
+            }
+            
+            if (alerts.congestion) {
+                document.getElementById('alert-congestion').style.display = 'block';
+            } else {
+                document.getElementById('alert-congestion').style.display = 'none';
+            }
+            
+            if (alerts.abnormal) {
+                document.getElementById('alert-abnormal').style.display = 'block';
+            } else {
+                document.getElementById('alert-abnormal').style.display = 'none';
+            }
+
+            if (alerts.crowded) {
+                document.getElementById('alert-crowded').style.display = 'block';
+            } else {
+                document.getElementById('alert-crowded').style.display = 'none';
+            }
+        };
+
+
+    </script>
+    
+</body>
+</html>
